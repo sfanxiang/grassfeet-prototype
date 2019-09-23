@@ -21,19 +21,27 @@ struct Point {
 	Transform transform;
 	std::vector<uint32_t> next;
 
-	Point(): in_path(false), has_grass(false), has_cow(false) {}
+	Point(): in_path(), has_grass(), has_cow() {}
 };
 
-// Returns whether flood fill succeeded.
-bool flood_fill(
+struct FloodFillResult {
+	uint32_t filled;
+	bool has_cow;
+
+	FloodFillResult(): filled(), has_cow() {}
+};
+
+FloodFillResult flood_fill(
 	std::vector<Point> &points,
 	uint32_t index,
 	uint32_t max_fill,
 	bool set_grass
 ) {
-	if (points[index].in_path) return false;
+	FloodFillResult result;
 
-	uint32_t count = 1;
+	if (points[index].in_path) return result;
+
+	result.filled++;
 
 	std::vector<bool> visited;
 	visited.resize(points.size());
@@ -42,12 +50,12 @@ bool flood_fill(
 	std::queue<uint32_t> fill_queue;
 	fill_queue.push(index);
 
-	if (points[index].has_cow) return false;
+	result.has_cow = result.has_cow || points[index].has_cow;
 	if (set_grass) {
 		points[index].has_grass = true;
 	}
 
-	if (max_fill < count) return false;
+	if (max_fill < result.filled) return result;
 
 	while (!fill_queue.empty()) {
 		index = fill_queue.front();
@@ -55,21 +63,21 @@ bool flood_fill(
 
 		for (auto &i: points[index].next) {
 			if (!visited[i] && !points[i].in_path) {
-				count++;
+				result.filled++;
 				visited[i] = true;
 				fill_queue.push(i);
 
-				if (points[i].has_cow) return false;
+				result.has_cow = result.has_cow || points[i].has_cow;
 				if (set_grass) {
 					points[i].has_grass = true;
 				}
 
-				if (max_fill < count) return false;
+				if (max_fill < result.filled) return result;
 			}
 		}
 	}
 
-	return true;
+	return result;
 }
 
 // I found it hard (if possible at all) to define the exterior of a shape on a
@@ -85,16 +93,19 @@ void step_on(std::vector<Point> &points, uint32_t index, uint32_t max_fill)
 	point.in_path = point.has_grass = true;
 
 	// Flood fill.
-	bool filled = false;
+	bool has_valid_enclosure = false;
 	for (auto &i: point.next) {
-		if (flood_fill(points, i, max_fill, false)) {
-			flood_fill(points, i, max_fill, true);
-			filled = true;
+		auto result = flood_fill(points, i, max_fill, false);
+		if (result.filled > 0 && result.filled <= max_fill) {
+			has_valid_enclosure = true;
+			if (!result.has_cow) {
+				flood_fill(points, i, max_fill, true);
+			}
 		}
 	}
 
-	if (filled) {
-		// Now that we filled something, delete all paths.
+	if (has_valid_enclosure) {
+		// Delete all paths.
 		for (auto &point: points) {
 			point.in_path = false;
 		}
