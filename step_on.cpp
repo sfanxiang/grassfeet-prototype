@@ -16,6 +16,7 @@ struct Transform {
 // 2. Because we use graph to represent data, we have to ensure the player
 //    never go from one point to a non-neighboring point. And grass can only be
 //    filled by neighboring points.
+// 3. This can be improved so that each player has their own path.
 struct Point {
 	bool in_path, has_grass, has_cow;
 	Transform transform;
