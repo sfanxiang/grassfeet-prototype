@@ -11,69 +11,104 @@ struct Transform {
 	Transform(): x(), y(), z() {}
 };
 
-// 1. Here "path" and "grass" behave differently. One consequence of this is
-//    that we have to highlight the path for the player.
-// 2. Because we use graph to represent data, we have to ensure the player
+enum class PointFillStatus {
+	Empty,
+	Path,
+	Grass
+};
+
+// 1. Because we use graph to represent data, we have to ensure the player
 //    never go from one point to a non-neighboring point. And grass can only be
 //    filled by neighboring points.
-// 3. This can be improved so that each player has their own path.
 struct Point {
-	bool in_path, has_grass, has_cow;
+	PointFillStatus fill_status;
+	bool has_cow;
 	Transform transform;
 	std::vector<uint32_t> next;
 
-	Point(): in_path(), has_grass(), has_cow() {}
+	Point(): fill_status(PointFillStatus::Empty), has_cow() {}
 };
 
 struct FloodFillResult {
 	uint32_t filled;
+	bool has_visited;
 	bool has_cow;
+	bool path_only;
 
-	FloodFillResult(): filled(), has_cow() {}
+	FloodFillResult(): filled(), has_visited(), has_cow(), path_only(true) {}
 };
 
+// Result is only valid when called without set_grass.
 FloodFillResult flood_fill(
 	std::vector<Point> &points,
 	uint32_t index,
-	uint32_t max_fill,
+	std::vector<bool> &visited,
 	bool set_grass
 ) {
 	FloodFillResult result;
 
-	if (points[index].in_path) return result;
-
+	if (visited[index]) {
+		result.has_visited = true;
+		return result;
+	}
+	if (points[index].fill_status != PointFillStatus::Empty) {
+		return result;
+	}
+	if (points[index].has_cow) {
+		result.has_cow = true;
+		return result;
+	}
 	result.filled++;
+	if (set_grass) {
+		points[index].fill_status = PointFillStatus::Grass;
+	}
 
-	std::vector<bool> visited;
-	visited.resize(points.size());
-	visited[index] = true;
+	std::vector<bool> used(points.size());
+	used[index] = visited[index] = true;
 
 	std::queue<uint32_t> fill_queue;
 	fill_queue.push(index);
-
-	result.has_cow = result.has_cow || points[index].has_cow;
-	if (set_grass) {
-		points[index].has_grass = true;
-	}
-
-	if (max_fill < result.filled) return result;
 
 	while (!fill_queue.empty()) {
 		index = fill_queue.front();
 		fill_queue.pop();
 
 		for (auto &i: points[index].next) {
-			if (!visited[i] && !points[i].in_path) {
-				result.filled++;
-				visited[i] = true;
-				fill_queue.push(i);
-
-				result.has_cow = result.has_cow || points[i].has_cow;
-				if (set_grass) {
-					points[i].has_grass = true;
+			if (!used[i]) {
+				switch (points[i].fill_status) {
+				case PointFillStatus::Empty:
+					if (visited[i]) {
+						result.has_visited = true;
+						return result;
+					}
+					if (points[i].has_cow) {
+						result.has_cow = true;
+						return result;
+					}
+					result.filled++;
+					if (set_grass) {
+						points[i].fill_status = PointFillStatus::Grass;
+					}
+					used[i] = visited[i] = true;
+					fill_queue.push(i);
+					break;
+				case PointFillStatus::Path:
+					if (points[i].has_cow) {
+						result.has_cow = true;
+						return result;
+					}
+					if (set_grass) {
+						points[i].fill_status = PointFillStatus::Grass;
+					}
+					break;
+				case PointFillStatus::Grass:
+					if (points[i].has_cow) {
+						result.has_cow = true;
+						return result;
+					}
+					result.path_only = false;
+					break;
 				}
-
-				if (max_fill < result.filled) return result;
 			}
 		}
 	}
@@ -81,51 +116,67 @@ FloodFillResult flood_fill(
 	return result;
 }
 
-// I found it hard (if possible at all) to define the exterior of a shape on a
-// closed surface. I used max_fill as a workaround, but we shouldn't rely on
-// it (the player can just fill out the area manually until it reaches below
-// max_fill). I'd recommend restricting cows to certain areas, distributed
-// across the map, to prevent filling out the entire planet.
 void step_on(std::vector<Point> &points, uint32_t index, uint32_t max_fill)
 {
 	Point &point = points[index];
 
 	// Mark the current point.
-	point.in_path = point.has_grass = true;
+	point.fill_status = PointFillStatus::Path;
 
 	// Flood fill.
-	bool has_valid_enclosure = false;
+
+	enum class Status {
+		None, Single, Multiple
+	};
+	Status status = Status::None;
+	uint32_t single_index = 0;
+	bool single_path_only = false;
+
+	std::vector<bool> visited(points.size());
+
 	for (auto &i: point.next) {
-		auto result = flood_fill(points, i, max_fill, false);
-		if (result.filled > 0 && result.filled <= max_fill) {
-			has_valid_enclosure = true;
-			if (!result.has_cow) {
-				flood_fill(points, i, max_fill, true);
+		auto result = flood_fill(points, i, visited, false);
+		if (result.filled > 0 && result.filled <= max_fill &&
+			!result.has_cow && !result.has_visited)
+		{
+			std::vector<bool> tmp_visited(points.size());
+
+			switch (status) {
+			case Status::None:
+				status = Status::Single;
+				single_index = i;
+				single_path_only = result.path_only;
+				break;
+			case Status::Single:
+				status = Status::Multiple;
+				flood_fill(points, single_index, tmp_visited, true);
+				flood_fill(points, i, tmp_visited, true);
+				break;
+			case Status::Multiple:
+				flood_fill(points, i, tmp_visited, true);
+				break;
 			}
 		}
 	}
-
-	if (has_valid_enclosure) {
-		// Delete all paths.
-		for (auto &point: points) {
-			point.in_path = false;
-		}
+	if (status == Status::Single && single_path_only) {
+		std::vector<bool> tmp_visited(points.size());
+		flood_fill(points, single_index, tmp_visited, true);
 	}
 }
 
 static void print_status(std::vector<Point> &points)
 {
 	std::cout << "Path:" << std::endl;
-	for (int i = 0; i < points.size(); i++) {
-		if (points[i].in_path) {
+	for (uint32_t i = 0; i < points.size(); i++) {
+		if (points[i].fill_status == PointFillStatus::Path) {
 			std::cout << i << " ";
 		}
 	}
 	std::cout << std::endl;
 
 	std::cout << "Grass:" << std::endl;
-	for (int i = 0; i < points.size(); i++) {
-		if (points[i].has_grass) {
+	for (uint32_t i = 0; i < points.size(); i++) {
+		if (points[i].fill_status == PointFillStatus::Grass) {
 			std::cout << i << " ";
 		}
 	}
@@ -138,8 +189,7 @@ int main()
 
 	// Map
 	std::cin >> n >> max_fill;
-	std::vector<Point> points;
-	points.resize(n);
+	std::vector<Point> points(n);
 
 	for (uint32_t i = 0; i < n; i++) {
 		uint32_t neighbors;
