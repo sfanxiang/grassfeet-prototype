@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <iostream>
 #include <queue>
 #include <utility>
@@ -39,11 +40,12 @@ struct FloodFillResult {
 };
 
 // Result is only valid when called without set_grass.
-FloodFillResult flood_fill(
+static FloodFillResult flood_fill(
 	std::vector<Point> &points,
 	uint32_t index,
 	std::vector<bool> &visited,
-	bool set_grass
+	bool set_grass,
+	std::function<void(uint32_t, PointFillStatus)> &fill
 ) {
 	FloodFillResult result;
 
@@ -59,6 +61,7 @@ FloodFillResult flood_fill(
 		return result;
 	}
 	result.filled++;
+	fill(index, PointFillStatus::Grass);
 	if (set_grass) {
 		points[index].fill_status = PointFillStatus::Grass;
 	}
@@ -86,6 +89,7 @@ FloodFillResult flood_fill(
 						return result;
 					}
 					result.filled++;
+					fill(index, PointFillStatus::Grass);
 					if (set_grass) {
 						points[i].fill_status = PointFillStatus::Grass;
 					}
@@ -97,6 +101,7 @@ FloodFillResult flood_fill(
 						result.has_cow = true;
 						return result;
 					}
+					fill(index, PointFillStatus::Grass);
 					if (set_grass) {
 						points[i].fill_status = PointFillStatus::Grass;
 					}
@@ -116,11 +121,18 @@ FloodFillResult flood_fill(
 	return result;
 }
 
-void step_on(std::vector<Point> &points, uint32_t index, uint32_t max_fill)
-{
+void step_on(
+	std::vector<Point> &points, uint32_t index, uint32_t max_fill,
+	bool set_status = true,
+	std::function<void(uint32_t, PointFillStatus)> fill
+		= [](uint32_t, PointFillStatus) {}
+) {
 	Point &point = points[index];
 
+	auto prev_fill_status = point.fill_status;
+
 	// Mark the current point.
+	fill(index, PointFillStatus::Path);
 	point.fill_status = PointFillStatus::Path;
 
 	// Flood fill.
@@ -135,7 +147,10 @@ void step_on(std::vector<Point> &points, uint32_t index, uint32_t max_fill)
 	std::vector<bool> visited(points.size());
 
 	for (auto &i: point.next) {
-		auto result = flood_fill(points, i, visited, false);
+		std::function<void(uint32_t, PointFillStatus)> fill_nop =
+			[](uint32_t, PointFillStatus) {};
+		auto result = flood_fill(points, i, visited, false, fill_nop);
+
 		if (result.filled > 0 && result.filled <= max_fill &&
 			!result.has_cow && !result.has_visited)
 		{
@@ -149,19 +164,22 @@ void step_on(std::vector<Point> &points, uint32_t index, uint32_t max_fill)
 				break;
 			case Status::Single:
 				status = Status::Multiple;
-				flood_fill(points, single_index, tmp_visited, true);
-				flood_fill(points, i, tmp_visited, true);
+				flood_fill(points, single_index, tmp_visited, set_status, fill);
+				flood_fill(points, i, tmp_visited, set_status, fill);
 				break;
 			case Status::Multiple:
-				flood_fill(points, i, tmp_visited, true);
+				flood_fill(points, i, tmp_visited, set_status, fill);
 				break;
 			}
 		}
 	}
 	if (status == Status::Single && single_path_only) {
 		std::vector<bool> tmp_visited(points.size());
-		flood_fill(points, single_index, tmp_visited, true);
+		flood_fill(points, single_index, tmp_visited, set_status, fill);
 	}
+
+	if (!set_status)
+		point.fill_status = prev_fill_status;
 }
 
 static void print_status(std::vector<Point> &points)
